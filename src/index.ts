@@ -1,58 +1,52 @@
-import  { getMxQuote, mxSwap } from './mxApi';
+import  { getMxQuote, mxSwap, checkOrderStatus } from './mxApi';
 import { minRange, maxRange, trAmount } from './config'
 
 let totalBuyCnt: number = 0;
 let totalSellCnt: number = 0;
 let direction: string = "left";
 
+let sellOrderId = '';
+let buyOrderId = '';
+let sellOrderReady = true;
+let buyOrderReady = true;
+let totalOrderNum = 0;
+
 (async () => {
     
     // const quote = await getMxQuote("SOLUSDT");
     setInterval(async () => {
         const now = new Date();
-        const ctTime = now.toLocaleTimeString();
+        
         console.log("---------------------------------------------------------------------------------------");
         const stQuote = await getMxQuote("SOLUSDT");
-        const seQuote = await getMxQuote("SOLUSDE");
-        if(stQuote) {
-            console.log(`${stQuote.symbol} price: ${stQuote.price}`)
-        } else {
-            console.log("No quote found")
 
+        if( stQuote && sellOrderReady && buyOrderReady) {
+            const currentPrice = Number(Number(stQuote.price).toFixed(2));
+            const buyPrice = currentPrice - 0.03;
+            const sellPrice = currentPrice + 0.03;
+            
+            const buyData = await mxSwap("SOLUSDT", "BUY", '0.01', buyPrice.toString());
+            buyOrderId = buyData.orderId;
+            const sellData = await mxSwap("SOLUSDT", "SELL", '0.01', sellPrice.toString());
+            sellOrderId = sellData.orderId;
+
+            sellOrderReady = false;
+            buyOrderReady = false;
+
+            totalOrderNum++;
+            console.log(`Total orderNumber is ${totalOrderNum}`)
         }
-        if(seQuote) {
-            console.log(`${seQuote.symbol} price: ${seQuote.price}`)
-        } else {
-            console.log("No quote found")
-        }
 
-        if(stQuote && seQuote) {
-            const diff = Math.abs(stQuote.price - seQuote.price);
-            // const diffPercent = (diff / stQuote.price) * 100;
-            console.log(`Diff: ${diff} || ${ctTime}`);
-            // console.log(`Diff Percent: ${diffPercent}`)
-
-            if(diff < minRange) {
-                if(direction === "left") {
-                    // E->S->T
-                    // await mxSwap("SOLUSDE", "BUY", trAmount);
-                    // await mxSwap("SOLUSDT", "SELL", trAmount);
-
-                    totalBuyCnt++;
-                }
-                direction = "right";
+        const sellOrderData = await checkOrderStatus('SOLUSDT', sellOrderId);
+        const buyOrderData = await checkOrderStatus('SOLUSDT', buyOrderId)
                 
-            } else if(diff > maxRange) {
-                if(direction === 'right') {
-                    // T->S->E
-                    // await mxSwap("SOLUSDT", "BUY", trAmount);
-                    // await mxSwap("SOLUSDE", "SELL", trAmount);
-                    totalSellCnt++;
-                }
-                direction = "left";
-                
-            }
-            console.log(`Total Buy Cnt: ${totalBuyCnt} || Total Sell Cnt: ${totalSellCnt}`)
-        }
-    }, 5000);
+        if(sellOrderData.status === 'FILLED')
+            sellOrderReady = true;
+        if(buyOrderData.status === 'FILLED')
+            buyOrderReady = true;
+
+        console.log(`Buy Status: ${buyOrderData.status}-------------Sell Order Statur: ${sellOrderData.status}`);
+
+
+    }, 1000);
 })();
