@@ -2,7 +2,7 @@ import { getMxQuote, mxSwap, checkOrderStatus } from './mxApi';
 import { minRange, maxRange, trAmount } from './config';
 
 const PRC_LIMIT = 20;
-const ORDER_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const ORDER_TIMEOUT_MS = 3 * 60 * 1000; // 5 minutes
 const PRICE_DIFF_THRESHOLD = 0.4;
 const PENDING_ORDER_LIMIT = 3;
 
@@ -83,10 +83,10 @@ function shouldRestartProcess() {
 // --------------------Price Collector--------------------------------------------//
 
 async function updatePriceList() {
-    const quote = await getMxQuote("SOLUSDT");
+    const quote = await getMxQuote("LINKUSDT");
     if (!quote) return;
 
-    const price = Number(Number(quote.price).toFixed(4));
+    const price = Number(Number(quote.price).toFixed(2));
 
     priceArray.push(price);
     if (priceArray.length > PRC_LIMIT) {
@@ -107,6 +107,57 @@ async function priceCollectorLoop() {
 // Start this in background
 priceCollectorLoop();
 
+// ------------------------------GET MAIN TWO VALUES---------------------------------------------------------
+function getMainTwoValues(prices: number[]): {min: number, max: number} | any {
+    if (!Array.isArray(prices) || prices.length === 0) return "fail";
+
+    const lastValue: number = prices[prices.length - 1];
+
+    // Count frequencies
+    const freq: Record<number, number> = {};
+    for (const p of prices) {
+        freq[p] = (freq[p] || 0) + 1;
+    }
+
+    // Sort by frequency (desc)
+    const sorted = Object.entries(freq)
+        .sort((a, b) => b[1] - a[1])  // sort by count
+        .map(item => Number(item[0])); // extract price values
+
+    const mainTwo = sorted.slice(0, 2);
+
+    // Last value must be one of the top 2
+    if (!mainTwo.includes(lastValue)) {
+        return "fail";
+    }
+
+    const diff = Math.abs(mainTwo[0] - mainTwo[1])
+    
+    let result = {}
+    console.log(`mainTwo value-- ${mainTwo}`)
+    if(diff > 0.01) {
+        // if last value is max value or not
+        if(mainTwo[0] == prices[prices.length - 1]) {
+            result = {
+                min: mainTwo[0] - 0.01,
+                max: mainTwo[0]
+            }
+        } else {
+            result = {
+                min: mainTwo[1],
+                max: mainTwo[1] + 0.01
+            }
+        }
+    } else {
+        result = {
+            min: mainTwo[1],
+            max: mainTwo[0]
+        }
+    }
+
+    return result;
+}
+
 // ------------------------------MAIN FUNCTION LOOP---------------------------------------------------------
 
 (async () => {
@@ -114,80 +165,74 @@ priceCollectorLoop();
         console.log("----------------------------------------------------");
         
         // Check if we need to restart the process
-        console.log("initial condition is ", shouldRestartProcess(), pendingOrder.length, PENDING_ORDER_LIMIT)
-        if (shouldRestartProcess() && pendingOrder.length < PENDING_ORDER_LIMIT) {
-            resetState();// Brief pause before restarting
-            // continue;
-        }
-        console.log("new order trigger");
-        // const stQuote = await getMxQuote("SOLUSDT");
+        // if (shouldRestartProcess() && pendingOrder.length < PENDING_ORDER_LIMIT) {
+        //     resetState();// Brief pause before restarting
+        //     // continue;
+        // }
+
+        console.log("new order trigger", buyOrderReady, sellOrderReady);
         let buyPrice = 0;
         let sellPrice = 0;
         // -------- Create both orders only if both are free --------
-        // if (stQuote && buyOrderReady && sellOrderReady && priceArray.length == PRC_LIMIT) {
         if (buyOrderReady && sellOrderReady && priceArray.length == PRC_LIMIT) {
-
             const currentPrice = Number(Number(priceArray[priceArray.length - 1]).toFixed(2));
-            if(getPriceLevel() === 'HIGH') {
-                buyPrice  = currentPrice - 0.12;
-                sellPrice = currentPrice;
-            } else if (getPriceLevel() === 'LOW') {
-                buyPrice  = currentPrice;
-                sellPrice = currentPrice + 0.12;
-            } else if (getPriceLevel() === 'MID') {
-                buyPrice  = currentPrice - 0.06;
-                sellPrice = currentPrice + 0.06;
-            }
             
+            if(getMainTwoValues(priceArray) == 'fail'){
+                console.log("it's faile value");
+                continue;
+            } else {
+                buyPrice = getMainTwoValues(priceArray).min;
+                sellPrice = getMainTwoValues(priceArray).max;
+            }
+            console.log("it should not never showed when fail")
+
             // store order timestamp and price
             orderTimestamp = Date.now();
             orderPrice = (buyPrice + sellPrice) / 2;
 
             // correct ID assignment
-            const buyData  = await mxSwap("SOLUSDT", "BUY",  '0.01', buyPrice.toString());
-            buyOrderId  = buyData.orderId;
-            pendingOrder.push(buyOrderId);
+            const buyData  = await mxSwap("LINKUSDT", "BUY",  '0.1', buyPrice.toString());
+            console.log("buyData --", buyData)
+            if(buyData.orderId) {
+                buyOrderId  = buyData.orderId;
+                pendingOrder.push(buyOrderId);
+            }
 
-            const sellData = await mxSwap("SOLUSDT", "SELL", '0.01', sellPrice.toString());
-            sellOrderId = sellData.orderId;
-            pendingOrder.push(sellOrderId);
-
+            const sellData = await mxSwap("LINKUSDT", "SELL", '0.1', sellPrice.toString());
+            console.log("sell Data", sellData)
+            if( sellData.orderId) {
+                sellOrderId = sellData.orderId;
+                pendingOrder.push(sellOrderId);
+            }
+            
             buyOrderReady  = false;
             sellOrderReady = false;
 
             totalOrderNum++;
-            console.log(`New cycle order number: ${totalOrderNum}`);
+            console.log(`New order triggered: ${totalOrderNum}, ${buyOrderId}, ${sellOrderId}`);
         }
 
         // -------- Check order statuses --------
         if (!buyOrderReady) {
-            const buyOrderData = await checkOrderStatus('SOLUSDT', buyOrderId);
+            const buyOrderData = await checkOrderStatus('LINKUSDT', buyOrderId);
             if (buyOrderData.status === 'FILLED') {
                 removePendingOrder(buyOrderId);
-                // await sleep(1000);
                 buyOrderReady = true;
-                // if(sellOrderReady){ //Sell ordr already excecuted.
-                //     tendency = 'up';
-                // }
             }
             console.log(`Buy Status:  ${buyOrderData.status}`);
         }
 
         if (!sellOrderReady) {
-            const sellOrderData = await checkOrderStatus('SOLUSDT', sellOrderId);
+            const sellOrderData = await checkOrderStatus('LINKUSDT', sellOrderId);
             if (sellOrderData.status === 'FILLED') {
                 removePendingOrder(sellOrderId);
-                // await sleep(1000);
                 sellOrderReady = true;
-                // if(buyOrderReady) { // Buy order already executed
-                //     tendency = 'down';
-                // }
             }
             console.log(`Sell Status: ${sellOrderData.status}`);
         }
 
         pendingOrder.forEach(async (orderId) => {
-            const orderData = await checkOrderStatus('SOLUSDT', orderId);
+            const orderData = await checkOrderStatus('LINKUSDT', orderId);
             if (orderData.status === 'FILLED') {
                 removePendingOrder(orderId);
             }
